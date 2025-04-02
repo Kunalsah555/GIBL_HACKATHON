@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 from ttkthemes import ThemedTk
 import threading
-from tkinter import ttk  # Import ttk for progress bar
+from tkinter import ttk
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 
@@ -73,14 +73,23 @@ def extract_text_from_pdf(pdf_path):
         images = convert_from_path(pdf_path, poppler_path=poppler_path)
         extracted_text = ""
         
+        # Set progress bar to determinate mode
+        progress_bar.config(mode='determinate', maximum=len(images))
+        progress_bar.start()
+
         for i, img in enumerate(images):
             processed_image = preprocess_image(img)
             pil_image = Image.fromarray(processed_image)
             text = pytesseract.image_to_string(pil_image)
             extracted_text += f"Page {i + 1}:\n{text}\n\n"
-        
+
+            # Update progress bar
+            progress_bar['value'] = i + 1
+            root.update_idletasks()  # Update UI
+
         extracted_text = extracted_text.strip()
         save_text_to_file(extracted_text, "pdf_text")
+        progress_bar.stop()
         return extracted_text
     except Exception as e:
         logging.error(f"Error extracting text from PDF: {e}")
@@ -98,33 +107,34 @@ def extract_text(file_path):
 
 # Cloud integration (Google Drive example)
 def upload_to_google_drive(file_path):
-    try:
-        gauth = GoogleAuth()
-        gauth.LocalWebserverAuth()  # This creates a local webserver and auto handles authentication.
-        drive = GoogleDrive(gauth)
+    def upload():
+        try:
+            gauth = GoogleAuth()
+            gauth.LocalWebserverAuth()  # This creates a local webserver and auto handles authentication.
+            drive = GoogleDrive(gauth)
 
-        file_drive = drive.CreateFile({'title': os.path.basename(file_path)})
-        file_drive.Upload()
-        logging.info(f"File uploaded to Google Drive: {file_path}")
-        messagebox.showinfo("Success", f"File uploaded to Google Drive: {file_path}")
-    except Exception as e:
-        logging.error(f"Error uploading file to Google Drive: {e}")
-        messagebox.showerror("Error", f"Error uploading file: {e}")
+            file_drive = drive.CreateFile({'title': os.path.basename(file_path)})
+            file_drive.Upload()
+            logging.info(f"File uploaded to Google Drive: {file_path}")
+            messagebox.showinfo("Success", f"File uploaded to Google Drive: {file_path}")
+        except Exception as e:
+            logging.error(f"Error uploading file to Google Drive: {e}")
+            messagebox.showerror("Error", f"Error uploading file: {e}")
+
+    threading.Thread(target=upload).start()  # Run upload in background thread
 
 # Function to select a file using a file dialog
 def browse_file():
-    file_path = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf"), ("Image files", "*.jpg;*.jpeg;*.png")])
-    if file_path:
+    file_paths = filedialog.askopenfilenames(filetypes=[("PDF files", "*.pdf"), ("Image files", "*.jpg;*.jpeg;*.png")])
+    if file_paths:
         entry_file_path.delete(0, tk.END)
-        entry_file_path.insert(0, file_path)
-        # File format detection
-        file_extension = os.path.splitext(file_path)[1].lower()
-        label_file_format.config(text=f"Detected File Format: {file_extension.upper()}")
+        entry_file_path.insert(0, ', '.join(file_paths))
+        label_file_format.config(text=f"Detected File Format: {', '.join([os.path.splitext(f)[1].upper() for f in file_paths])}")
 
 # Function to extract and display text
 def extract_and_display_text():
-    file_path = entry_file_path.get()
-    if not file_path:
+    file_paths = entry_file_path.get().split(', ')  # Split comma-separated file paths
+    if not file_paths:
         messagebox.showerror("Error", "Please select a file first.")
         return
 
@@ -135,8 +145,10 @@ def extract_and_display_text():
         # Update the status message to indicate extraction in progress
         status_label.config(text="Extracting text... Please wait...")
 
-        # Call the existing extract_text function
-        extracted_text = extract_text(file_path)
+        all_text = ""
+        for file_path in file_paths:
+            extracted_text = extract_text(file_path)
+            all_text += extracted_text + "\n\n"  # Combine all extracted texts
 
         # Stop the progress bar animation when OCR is complete
         progress_bar.stop()
@@ -144,9 +156,9 @@ def extract_and_display_text():
         # Update the status message to indicate completion
         status_label.config(text="Extraction complete.")
 
-        # Display the extracted text in the ScrolledText widget
+        # Display the combined extracted text
         text_output.delete(1.0, tk.END)  # Clear previous output
-        text_output.insert(tk.END, extracted_text)  # Insert new text
+        text_output.insert(tk.END, all_text)  # Insert combined text
 
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred: {e}")
@@ -165,15 +177,15 @@ def save_extracted_text():
     if save_path:
         try:
             # Save as text and JSON files
-            save_text_to_file(extracted_text, save_path)
+            save_text_to_file(extracted_text, os.path.splitext(save_path)[0])
             messagebox.showinfo("Success", f"Text saved successfully to {save_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Error saving text: {e}")
 
 # Function for handling background threading for OCR extraction
 def run_ocr_in_background():
-    file_path = entry_file_path.get()
-    if not file_path:
+    file_paths = entry_file_path.get().split(', ')  # Split comma-separated file paths
+    if not file_paths:
         messagebox.showerror("Error", "Please select a file first.")
         return
 
@@ -231,12 +243,12 @@ button_upload.pack()
 progress_frame = tk.Frame(root)
 progress_frame.pack(padx=20, pady=10)
 
-progress_bar = ttk.Progressbar(progress_frame, length=300, mode='indeterminate')
-progress_bar.pack()
+progress_bar = ttk.Progressbar(progress_frame, orient="horizontal", length=500, mode="indeterminate")
+progress_bar.pack(pady=5)
 
-# Add a status label to show progress text
-status_label = tk.Label(progress_frame, text="Ready", font=("Arial", 12), fg="black")
-status_label.pack()
+# Status label to show the current status of extraction/upload
+status_label = tk.Label(root, text="Ready", font=("Arial", 12), fg="green")
+status_label.pack(pady=10)
 
 # Run the Tkinter event loop
 root.mainloop()
